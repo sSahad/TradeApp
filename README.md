@@ -343,7 +343,7 @@ private func connectToWebSocket() async {
    ```
 
 2. **Open in Xcode**
-   ```bash
+```bash
    open TradeApp.xcodeproj
    ```
 
@@ -353,7 +353,7 @@ private func connectToWebSocket() async {
    - **visionOS**: Choose visionOS simulator (requires Xcode 15+)
 
 4. **Build and Run**
-   ```bash
+```bash
    # Command line build (optional)
    xcodebuild -scheme TradeApp -destination 'platform=iOS Simulator,name=iPhone 16' build
    
