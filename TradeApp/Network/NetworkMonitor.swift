@@ -29,6 +29,10 @@ final class NetworkMonitor: ObservableObject {
         isConnectedSubject.eraseToAnyPublisher()
     }
     
+    var networkStatusPublisher: AnyPublisher<Bool, Never> {
+        $isConnected.eraseToAnyPublisher()
+    }
+    
     // MARK: - Initialization
     
     init() {
@@ -45,6 +49,8 @@ final class NetworkMonitor: ObservableObject {
         monitor.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async {
                 let isConnected = path.status == .satisfied
+                let wasConnected = self?.isConnected ?? false
+                
                 self?.isConnected = isConnected
                 self?.isConnectedSubject.send(isConnected)
                 
@@ -59,20 +65,46 @@ final class NetworkMonitor: ObservableObject {
                     self?.connectionType = nil
                 }
                 
-                print("🌐 Network status: \(isConnected ? "Connected" : "Disconnected")")
-                if let connectionType = self?.connectionType {
-                    print("📶 Connection type: \(connectionType)")
+                // Only log changes to avoid spam
+                if wasConnected != isConnected {
+                    print("🌐 NetworkMonitor: Status changed to \(isConnected ? "Connected" : "Disconnected")")
+                    if let connectionType = self?.connectionType {
+                        print("📶 Connection type: \(connectionType)")
+                    }
                 }
             }
         }
         
         monitor.start(queue: queue)
-        print("🌐 NetworkMonitor: Started monitoring")
+        
+        // Get initial state immediately
+        DispatchQueue.main.async {
+            let currentPath = self.monitor.currentPath
+            self.isConnected = currentPath.status == .satisfied
+            self.isConnectedSubject.send(self.isConnected)
+            print("🌐 NetworkMonitor: Started monitoring, initial status: \(self.isConnected ? "Connected" : "Disconnected")")
+        }
+    }
+    
+    @MainActor
+    func startMonitoringAsync() async {
+        startMonitoring()
+        
+        // Give it a brief moment to establish initial connection state
+        try? await Task.sleep(for: .milliseconds(50))
     }
     
     func stopMonitoring() {
         monitor.cancel()
         print("🌐 NetworkMonitor: Stopped monitoring")
+    }
+    
+    @MainActor
+    func stopMonitoringAsync() async {
+        stopMonitoring()
+        
+        // Brief delay to ensure clean stop
+        try? await Task.sleep(for: .milliseconds(50))
     }
     
     // MARK: - Utility Methods

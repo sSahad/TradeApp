@@ -69,11 +69,19 @@ class OrderBookViewModel: ObservableObject {
     // MARK: - Public Methods
     
     func connect() {
+        print("📊 OrderBookViewModel: Starting connection...")
+        isLoading = true
+        // Reset state for fresh connection
+        orderBookState = OrderBookState()
         orderBookUseCase.startOrderBookUpdates()
     }
     
     func disconnect() {
+        print("📊 OrderBookViewModel: Disconnecting...")
         orderBookUseCase.stopOrderBookUpdates()
+        // Reset state on disconnect to ensure fresh start on reconnect
+        orderBookState = OrderBookState()
+        isLoading = false
     }
     
     func reconnect() {

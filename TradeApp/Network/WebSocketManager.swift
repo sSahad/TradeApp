@@ -39,18 +39,14 @@ class WebSocketManager: WebSocketServiceProtocol, ObservableObject {
     private func setupNetworkMonitoring() {
         networkMonitor.isConnectedPublisher
             .sink { [weak self] isConnected in
+                guard let self = self else { return }
+                
                 if !isConnected {
-                    print("🌐 Network lost - setting no internet status")
-                    self?.connectionStatusPublisher.send(.noInternet)
-                    self?.disconnect() // Disconnect WebSocket when no internet
+                    print("🌐 WebSocketManager: Network lost - disconnecting WebSocket")
+                    self.disconnect()
                 } else {
-                    print("🌐 Network restored - attempting reconnection")
-                    // Only auto-reconnect if we were previously connected
-                    if self?.connectionStatusPublisher.value == .noInternet {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            self?.connect()
-                        }
-                    }
+                    print("🌐 WebSocketManager: Network available")
+                    // Don't set any status here - let ContentView handle status management
                 }
             }
             .store(in: &cancellables)
@@ -65,11 +61,20 @@ class WebSocketManager: WebSocketServiceProtocol, ObservableObject {
             return
         }
         
+        print("🔌 WebSocketManager: Attempting to connect...")
+        print("🌐 Network status: \(networkMonitor.isConnected ? "Connected" : "Disconnected")")
+        
         // Check internet connectivity first
         guard networkMonitor.isConnected else {
             print("🌐 No internet connection available")
             connectionStatusPublisher.send(.noInternet)
             return
+        }
+        
+        // Clean up any existing connection first
+        if webSocketTask?.state == .running {
+            print("🔌 Cleaning up existing connection before reconnecting")
+            disconnect()
         }
         
         guard let url = URL(string: Constants.webSocketURL) else {
@@ -89,14 +94,22 @@ class WebSocketManager: WebSocketServiceProtocol, ObservableObject {
         // Start listening for messages
         receiveMessages()
         
-        // Subscribe to required topics after a short delay to ensure connection
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            print("📡 WebSocketManager: Subscribing to topics...")
-            self.subscribeToTopics()
+        // Subscribe to required topics with proper async handling
+        Task {
+            await subscribeToTopicsAfterDelay()
         }
         
         // Start heartbeat after connection
         startHeartbeat()
+    }
+    
+    @MainActor
+    private func subscribeToTopicsAfterDelay() async {
+        // Wait for connection to establish before subscribing
+        try? await Task.sleep(for: .seconds(1))
+        
+        print("📡 WebSocketManager: Subscribing to topics...")
+        subscribeToTopics()
     }
     
     func disconnect() {
@@ -119,15 +132,23 @@ class WebSocketManager: WebSocketServiceProtocol, ObservableObject {
                 self?.receiveMessages() // Continue listening
             case .failure(let error):
                 print("❌ WebSocket receive error: \(error)")
-                self?.connectionStatusPublisher.send(.error(error.localizedDescription))
                 
-                // Clean up and attempt to reconnect after a delay
+                // Check if this is a network-related error
+                let errorString = error.localizedDescription.lowercased()
+                if errorString.contains("network") || errorString.contains("internet") || !(self?.networkMonitor.isConnected ?? true) {
+                    self?.connectionStatusPublisher.send(.noInternet)
+                } else {
+                    self?.connectionStatusPublisher.send(.error(error.localizedDescription))
+                }
+                
+                // Clean up
                 self?.heartbeatTimer?.invalidate()
                 self?.heartbeatTimer = nil
+                self?.webSocketTask?.cancel(with: .goingAway, reason: nil)
+                self?.webSocketTask = nil
                 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    self?.reconnect()
-                }
+                // Don't auto-reconnect - let ContentView handle it
+                print("🔌 WebSocket task ended due to error")
             }
         }
     }
@@ -228,8 +249,8 @@ class WebSocketManager: WebSocketServiceProtocol, ObservableObject {
                 if let retryAfter = json["meta"] as? [String: Any],
                    let retrySeconds = retryAfter["retryAfter"] as? Int {
                     print("⏳ Rate limited, retrying in \(retrySeconds) seconds")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + Double(retrySeconds)) {
-                        self.subscribeToTopics()
+                    Task {
+                        await retrySubscriptionAfterDelay(seconds: retrySeconds)
                     }
                     return
                 }
@@ -238,8 +259,8 @@ class WebSocketManager: WebSocketServiceProtocol, ObservableObject {
             // Handle server busy
             else if let status = json["status"] as? Int, status == 503 {
                 print("🔄 Server busy, retrying subscription in 1 second")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    self.subscribeToTopics()
+                Task {
+                    await retrySubscriptionAfterDelay(seconds: 1)
                 }
                 return
             }
@@ -264,6 +285,12 @@ class WebSocketManager: WebSocketServiceProtocol, ObservableObject {
         else {
             print("📨 Other message: \(message)")
         }
+    }
+    
+    @MainActor
+    private func retrySubscriptionAfterDelay(seconds: Int) async {
+        try? await Task.sleep(for: .seconds(seconds))
+        subscribeToTopics()
     }
     
     // MARK: - Subscription Management
@@ -320,9 +347,17 @@ class WebSocketManager: WebSocketServiceProtocol, ObservableObject {
         
         print("🔄 WebSocketManager: Initiating reconnection...")
         disconnect()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.connect()
+        
+        Task {
+            await reconnectAfterDelay()
         }
+    }
+    
+    @MainActor
+    private func reconnectAfterDelay() async {
+        // Wait before reconnecting to ensure clean state
+        try? await Task.sleep(for: .seconds(1))
+        connect()
     }
     
     var isConnected: Bool {

@@ -267,15 +267,11 @@ struct OrderBookView: View {
     
     @MainActor
     private func refreshOrderBook() async {
-        await withCheckedContinuation { continuation in
-            // Use the safe refresh method that doesn't disrupt WebSocket connection
-            viewModel.refresh()
-            
-            // Small delay to provide user feedback that refresh happened
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                continuation.resume()
-            }
-        }
+        // Use the safe refresh method that doesn't disrupt WebSocket connection
+        viewModel.refresh()
+        
+        // Brief delay to provide user feedback that refresh happened
+        try? await Task.sleep(for: .milliseconds(500))
     }
 }
 

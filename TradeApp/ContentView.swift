@@ -13,10 +13,14 @@ struct ContentView: View {
     @StateObject private var tradeViewModel: TradeViewModel
     
     private let webSocketService: WebSocketServiceProtocol
+    private let networkMonitor: NetworkMonitor
     
     @State private var selectedTab: TabType = .orderBook
     @State private var showConnectionDetails = false
     @State private var connectionStatus: ConnectionStatus = .disconnected
+    @State private var networkConnected: Bool = true // Assume connected initially
+    @State private var isInitialLoading: Bool = true // Add proper loading state
+    @State private var hasInitializedNetwork: Bool = false
     
     enum TabType: String, CaseIterable {
         case orderBook = "Order Book"
@@ -32,16 +36,24 @@ struct ContentView: View {
     
     init(diContainer: DIContainer = DIContainer.shared) {
         self.webSocketService = diContainer.getWebSocketService()
+        self.networkMonitor = diContainer.getNetworkMonitor()
         self._orderBookViewModel = StateObject(wrappedValue: diContainer.makeOrderBookViewModel())
         self._tradeViewModel = StateObject(wrappedValue: diContainer.makeTradeViewModel())
     }
     
     var body: some View {
         GeometryReader { geometry in
-            if connectionStatus == .noInternet {
-                // Show full-screen no internet message
+            if isInitialLoading {
+                // Proper splash screen
+                splashScreen
+                    .transition(.opacity)
+            } else if connectionStatus == .noInternet {
+                // Show no internet only when explicitly set to no internet status
                 NoInternetView(onRetry: {
-                    webSocketService.connect()
+                    print("🔄 Try Again button pressed")
+                    Task {
+                        await retryConnection()
+                    }
                 })
                 .transition(.opacity)
             } else {
@@ -61,8 +73,13 @@ struct ContentView: View {
             }
         }
         .onAppear {
+            setupNetworkMonitoring()
             setupConnectionStatusMonitoring()
-            connectToWebSocket()
+            
+            // Initialize connection with proper async handling
+            Task {
+                await initializeConnection()
+            }
         }
         .onDisappear {
             orderBookViewModel.disconnect()
@@ -70,6 +87,50 @@ struct ContentView: View {
             webSocketService.disconnect()
         }
         .preferredColorScheme(nil) // Respect system setting
+    }
+    
+    private var splashScreen: some View {
+        VStack(spacing: Constants.Spacing.xl) {
+            Spacer()
+            
+            // App Logo/Icon
+            VStack(spacing: Constants.Spacing.lg) {
+                ZStack {
+                    Circle()
+                        .fill(Constants.Colors.accent.opacity(0.1))
+                        .frame(width: 120, height: 120)
+                    
+                    Image(systemName: "bitcoinsign.circle.fill")
+                        .font(.system(size: 48, weight: .medium))
+                        .foregroundColor(Constants.Colors.accent)
+                }
+                
+                VStack(spacing: Constants.Spacing.sm) {
+                    Text("TradeApp")
+                        .font(Constants.Typography.title)
+                        .foregroundColor(Constants.Colors.primaryText)
+                    
+                    Text("Real-time Bitcoin Trading")
+                        .font(Constants.Typography.body)
+                        .foregroundColor(Constants.Colors.secondaryText)
+                }
+            }
+            
+            // Loading indicator
+            VStack(spacing: Constants.Spacing.md) {
+                ProgressView()
+                    .scaleEffect(1.2)
+                    .tint(Constants.Colors.accent)
+                
+                Text("Initializing...")
+                    .font(Constants.Typography.caption)
+                    .foregroundColor(Constants.Colors.tertiaryText)
+            }
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Constants.Colors.groupedBackground)
     }
     
     private var modernNavigationHeader: some View {
@@ -273,14 +334,91 @@ struct ContentView: View {
             .store(in: &cancellables)
     }
     
-    private func connectToWebSocket() {
+    @MainActor
+    private func initializeConnection() async {
+        // Wait for network monitoring to initialize
+        try? await Task.sleep(for: .milliseconds(500))
+        
+        self.isInitialLoading = false
+        
+        if self.networkConnected {
+            await connectToWebSocket()
+        }
+    }
+    
+    @MainActor
+    private func connectToWebSocket() async {
         print("🔌 ContentView: Starting WebSocket connection...")
+        
+        // Force set to connecting to show proper state
+        connectionStatus = .connecting
+        
+        // Ensure clean state before connecting
+        orderBookViewModel.disconnect()
+        tradeViewModel.disconnect()
+        webSocketService.disconnect()
+        
+        // Wait for clean disconnect
+        try? await Task.sleep(for: .milliseconds(300))
+        
+        // Start connection
         webSocketService.connect()
         
         // Start the use cases after connection is initiated
         print("📊 ContentView: Starting OrderBook and Trade subscriptions...")
         orderBookViewModel.connect()
         tradeViewModel.connect()
+    }
+    
+    @MainActor
+    private func retryConnection() async {
+        print("🔄 ContentView: Retrying connection...")
+        
+        // Force set to connecting immediately to show progress
+        connectionStatus = .connecting
+        
+        // Ensure everything is disconnected and reset
+        orderBookViewModel.disconnect()
+        tradeViewModel.disconnect()
+        webSocketService.disconnect()
+        
+        // Wait a moment for cleanup
+        try? await Task.sleep(for: .milliseconds(500))
+        
+        // Force connection attempt
+        await connectToWebSocket()
+    }
+    
+    private func setupNetworkMonitoring() {
+        networkMonitor.networkStatusPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { isConnected in
+                let wasConnected = networkConnected
+                networkConnected = isConnected
+                hasInitializedNetwork = true
+                
+                print("🌐 Network status changed: \(isConnected ? "Connected" : "Disconnected")")
+                
+                // Handle network loss immediately
+                if !isConnected && wasConnected {
+                    print("🌐 Network lost - setting no internet status")
+                    connectionStatus = .noInternet
+                }
+                // Handle network restoration
+                else if isConnected && !wasConnected {
+                    print("🌐 Network restored - clearing no internet and reconnecting")
+                    // Clear no internet status immediately
+                    if connectionStatus == .noInternet {
+                        connectionStatus = .connecting
+                    }
+                    // Attempt to reconnect after brief delay
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        await connectToWebSocket()
+                    }
+                }
+            }
+            .store(in: &cancellables)
     }
     
     @State private var cancellables = Set<AnyCancellable>()

@@ -63,11 +63,19 @@ class TradeViewModel: ObservableObject {
     // MARK: - Public Methods
     
     func connect() {
+        print("📈 TradeViewModel: Starting connection...")
+        isLoading = true
+        // Reset state for fresh connection
+        tradesState = TradesState()
         tradeUseCase.startTradeUpdates()
     }
     
     func disconnect() {
+        print("📈 TradeViewModel: Disconnecting...")
         tradeUseCase.stopTradeUpdates()
+        // Reset state on disconnect to ensure fresh start on reconnect
+        tradesState = TradesState()
+        isLoading = false
     }
     
     func reconnect() {
