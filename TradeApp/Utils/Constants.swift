@@ -13,8 +13,8 @@ struct Constants {
     static let webSocketURL = "wss://ws.bitmex.com/realtime"
     static let symbol = "XBTUSD"
     
-    // Subscriptions
-    static let orderBookTopic = "orderBookL2:\(symbol)"
+    // Subscriptions (using orderBookL2_25 for better performance as recommended by BitMEX)
+    static let orderBookTopic = "orderBookL2_25:\(symbol)"
     static let tradeTopic = "trade:\(symbol)"
     
     // UI Configuration

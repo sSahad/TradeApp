@@ -16,7 +16,9 @@ struct TradeView: View {
             modernHeader
             
             // Trade Content with enhanced loading states
-            if viewModel.isLoading {
+            if viewModel.connectionStatus == .noInternet {
+                modernNoInternetView
+            } else if viewModel.isLoading {
                 modernLoadingView
             } else {
                 modernTradeContent
@@ -224,11 +226,35 @@ struct TradeView: View {
         }
     }
     
+    private var modernNoInternetView: some View {
+        VStack(spacing: Constants.Spacing.lg) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 32, weight: .light))
+                .foregroundColor(Constants.Colors.error)
+            
+            VStack(spacing: Constants.Spacing.xs) {
+                Text("No Internet Connection")
+                    .font(Constants.Typography.headline)
+                    .foregroundColor(Constants.Colors.primaryText)
+                
+                Text("Check your connection to view live trades")
+                    .font(Constants.Typography.caption)
+                    .foregroundColor(Constants.Colors.tertiaryText)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Constants.Colors.primaryBackground)
+    }
+    
     @MainActor
     private func refreshTrades() async {
         await withCheckedContinuation { continuation in
-            viewModel.reconnect()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            // Use the safe refresh method that doesn't disrupt WebSocket connection
+            viewModel.refresh()
+            
+            // Small delay to provide user feedback that refresh happened
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 continuation.resume()
             }
         }
@@ -236,8 +262,8 @@ struct TradeView: View {
 }
 
 #Preview {
-    let webSocketManager = WebSocketManager()
-    let viewModel = TradeViewModel(webSocketManager: webSocketManager)
+    let diContainer = DIContainer.shared
+    let viewModel = diContainer.makeTradeViewModel()
     return TradeView(viewModel: viewModel)
         .background(Constants.Colors.groupedBackground)
 } 

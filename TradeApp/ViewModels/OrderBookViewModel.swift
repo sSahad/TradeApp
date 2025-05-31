@@ -11,9 +11,10 @@ import Combine
 class OrderBookViewModel: ObservableObject {
     @Published var orderBookState = OrderBookState()
     @Published var isLoading = true
-    @Published var connectionStatus: WebSocketManager.ConnectionStatus = .disconnected
+    @Published var connectionStatus: ConnectionStatus = .disconnected
     
-    private let webSocketManager: WebSocketManager
+    private let orderBookUseCase: OrderBookUseCaseProtocol
+    private let formattingUseCase: FormattingUseCaseProtocol
     private var cancellables = Set<AnyCancellable>()
     
     // Computed properties for UI
@@ -34,22 +35,27 @@ class OrderBookViewModel: ObservableObject {
         return sellOrders.map { $0.actualSize }.max() ?? 0
     }
     
-    init(webSocketManager: WebSocketManager) {
-        self.webSocketManager = webSocketManager
+    init(orderBookUseCase: OrderBookUseCaseProtocol, formattingUseCase: FormattingUseCaseProtocol) {
+        self.orderBookUseCase = orderBookUseCase
+        self.formattingUseCase = formattingUseCase
         setupSubscriptions()
+        // Don't auto-start here - let ContentView manage the connection
     }
     
     private func setupSubscriptions() {
-        // Subscribe to order book updates
-        webSocketManager.orderBookPublisher
+        // Subscribe to order book state updates
+        orderBookUseCase.orderBookStatePublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] response in
-                self?.handleOrderBookUpdate(response)
+            .sink { [weak self] state in
+                self?.orderBookState = state
+                if self?.isLoading == true {
+                    self?.isLoading = false
+                }
             }
             .store(in: &cancellables)
         
         // Subscribe to connection status
-        webSocketManager.connectionStatusPublisher
+        orderBookUseCase.connectionStatusPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
                 self?.connectionStatus = status
@@ -60,72 +66,42 @@ class OrderBookViewModel: ObservableObject {
             .store(in: &cancellables)
     }
     
-    private func handleOrderBookUpdate(_ response: BitMEXOrderBookResponse) {
-        orderBookState.updateOrders(with: response.data, action: response.action)
-        
-        // Stop loading indicator after first data
-        if isLoading && response.action == "partial" {
-            isLoading = false
-        }
-    }
-    
     // MARK: - Public Methods
     
     func connect() {
-        webSocketManager.connect()
+        orderBookUseCase.startOrderBookUpdates()
     }
     
     func disconnect() {
-        webSocketManager.disconnect()
+        orderBookUseCase.stopOrderBookUpdates()
     }
     
     func reconnect() {
-        webSocketManager.reconnect()
+        orderBookUseCase.reconnect()
+    }
+    
+    func refresh() {
+        // Trigger a safe refresh without disconnecting WebSocket
+        // This just updates the UI state without affecting the connection
+        objectWillChange.send()
     }
     
     // MARK: - Helper Methods for UI
     
     func volumePercentage(for item: OrderBookItem) -> Double {
         let maxVolume = item.isBuy ? maxBuyVolume : maxSellVolume
-        guard maxVolume > 0 else { return 0 }
-        return item.actualSize / maxVolume
+        return formattingUseCase.volumePercentage(for: item, maxVolume: maxVolume)
     }
     
     func accumulatedVolumePercentage(for item: OrderBookItem, in orders: [OrderBookItem]) -> Double {
-        guard let index = orders.firstIndex(of: item) else { return 0 }
-        
-        let accumulatedVolume: Double
-        if item.isBuy {
-            // For buy orders, accumulate from top (highest price)
-            accumulatedVolume = orders.prefix(index + 1).reduce(0) { $0 + $1.actualSize }
-        } else {
-            // For sell orders, accumulate from top (lowest price)
-            accumulatedVolume = orders.prefix(index + 1).reduce(0) { $0 + $1.actualSize }
-        }
-        
-        let totalVolume = orders.reduce(0) { $0 + $1.actualSize }
-        guard totalVolume > 0 else { return 0 }
-        
-        return accumulatedVolume / totalVolume
+        return formattingUseCase.accumulatedVolumePercentage(for: item, in: orders)
     }
     
     func formatPrice(_ price: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 1
-        formatter.maximumFractionDigits = 1
-        return formatter.string(from: NSNumber(value: price)) ?? String(format: "%.1f", price)
+        return formattingUseCase.formatPrice(price)
     }
     
     func formatSize(_ size: Double) -> String {
-        if size >= 1000000 {
-            return String(format: "%.1fM", size / 1000000)
-        } else if size >= 1000 {
-            return String(format: "%.1fK", size / 1000)
-        } else if size >= 1.0 {
-            return String(format: "%.4f", size)
-        } else {
-            return String(format: "%.4f", size)
-        }
+        return formattingUseCase.formatSize(size)
     }
 } 

@@ -6,14 +6,17 @@
 //
 
 import SwiftUI
+import Combine
 
 struct ContentView: View {
-    @StateObject private var webSocketManager = WebSocketManager()
     @StateObject private var orderBookViewModel: OrderBookViewModel
     @StateObject private var tradeViewModel: TradeViewModel
     
+    private let webSocketService: WebSocketServiceProtocol
+    
     @State private var selectedTab: TabType = .orderBook
     @State private var showConnectionDetails = false
+    @State private var connectionStatus: ConnectionStatus = .disconnected
     
     enum TabType: String, CaseIterable {
         case orderBook = "Order Book"
@@ -27,33 +30,44 @@ struct ContentView: View {
         }
     }
     
-    init() {
-        let webSocketManager = WebSocketManager()
-        self._webSocketManager = StateObject(wrappedValue: webSocketManager)
-        self._orderBookViewModel = StateObject(wrappedValue: OrderBookViewModel(webSocketManager: webSocketManager))
-        self._tradeViewModel = StateObject(wrappedValue: TradeViewModel(webSocketManager: webSocketManager))
+    init(diContainer: DIContainer = DIContainer.shared) {
+        self.webSocketService = diContainer.getWebSocketService()
+        self._orderBookViewModel = StateObject(wrappedValue: diContainer.makeOrderBookViewModel())
+        self._tradeViewModel = StateObject(wrappedValue: diContainer.makeTradeViewModel())
     }
     
     var body: some View {
         GeometryReader { geometry in
-            VStack(spacing: 0) {
-                // Enhanced Navigation Header
-                modernNavigationHeader
-                
-                // Enhanced Tab Control
-                modernTabControl
-                
-                // Content with smooth transitions
-                modernContentView
+            if connectionStatus == .noInternet {
+                // Show full-screen no internet message
+                NoInternetView(onRetry: {
+                    webSocketService.connect()
+                })
+                .transition(.opacity)
+            } else {
+                VStack(spacing: 0) {
+                    // Enhanced Navigation Header
+                    modernNavigationHeader
+                    
+                    // Enhanced Tab Control
+                    modernTabControl
+                    
+                    // Content with smooth transitions
+                    modernContentView
+                }
+                .background(Constants.Colors.groupedBackground)
+                .ignoresSafeArea(.all, edges: .bottom)
+                .transition(.opacity)
             }
-            .background(Constants.Colors.groupedBackground)
-            .ignoresSafeArea(.all, edges: .bottom)
         }
         .onAppear {
+            setupConnectionStatusMonitoring()
             connectToWebSocket()
         }
         .onDisappear {
-            webSocketManager.disconnect()
+            orderBookViewModel.disconnect()
+            tradeViewModel.disconnect()
+            webSocketService.disconnect()
         }
         .preferredColorScheme(nil) // Respect system setting
     }
@@ -128,8 +142,13 @@ struct ContentView: View {
         }
         .buttonStyle(PlainButtonStyle())
         .onTapGesture {
-            if webSocketManager.connectionStatusPublisher.value != .connected {
-                webSocketManager.reconnect()
+            if connectionStatus != .connected {
+                if connectionStatus == .noInternet {
+                    // For no internet, just try to reconnect (it will check network first)
+                    webSocketService.connect()
+                } else {
+                    webSocketService.reconnect()
+                }
             }
         }
     }
@@ -138,36 +157,38 @@ struct ContentView: View {
         Circle()
             .fill(connectionStatusColor)
             .frame(width: 8, height: 8)
-            .scaleEffect(webSocketManager.connectionStatusPublisher.value == .connecting ? 1.2 : 1.0)
+            .scaleEffect(connectionStatus == .connecting ? 1.2 : 1.0)
             .animation(
-                webSocketManager.connectionStatusPublisher.value == .connecting ? 
+                connectionStatus == .connecting ? 
                     .easeInOut(duration: 0.8).repeatForever(autoreverses: true) : 
                     .easeInOut(duration: 0.3),
-                value: webSocketManager.connectionStatusPublisher.value
+                value: connectionStatus
             )
             .overlay(
                 Circle()
                     .stroke(connectionStatusColor.opacity(0.3), lineWidth: 2)
-                    .scaleEffect(webSocketManager.connectionStatusPublisher.value == .connected ? 1.5 : 1.0)
-                    .opacity(webSocketManager.connectionStatusPublisher.value == .connected ? 0 : 1)
-                    .animation(.easeOut(duration: 1.0), value: webSocketManager.connectionStatusPublisher.value)
+                    .scaleEffect(connectionStatus == .connected ? 1.5 : 1.0)
+                    .opacity(connectionStatus == .connected ? 0 : 1)
+                    .animation(.easeOut(duration: 1.0), value: connectionStatus)
             )
     }
     
     private var connectionStatusColor: Color {
-        switch webSocketManager.connectionStatusPublisher.value {
+        switch connectionStatus {
         case .connected: return Constants.Colors.success
         case .connecting: return Constants.Colors.warning
         case .disconnected: return Constants.Colors.secondaryText
+        case .noInternet: return Constants.Colors.error
         case .error: return Constants.Colors.error
         }
     }
     
     private var connectionStatusText: String {
-        switch webSocketManager.connectionStatusPublisher.value {
+        switch connectionStatus {
         case .connected: return "Live"
         case .connecting: return "Connecting..."
         case .disconnected: return "Offline"
+        case .noInternet: return "No Internet"
         case .error: return "Error"
         }
     }
@@ -245,9 +266,24 @@ struct ContentView: View {
             .shadow(color: Constants.Shadow.light, radius: 4, x: 0, y: 2)
     }
     
-    private func connectToWebSocket() {
-        webSocketManager.connect()
+    private func setupConnectionStatusMonitoring() {
+        webSocketService.connectionStatusPublisher
+            .receive(on: DispatchQueue.main)
+            .assign(to: \.connectionStatus, on: self)
+            .store(in: &cancellables)
     }
+    
+    private func connectToWebSocket() {
+        print("🔌 ContentView: Starting WebSocket connection...")
+        webSocketService.connect()
+        
+        // Start the use cases after connection is initiated
+        print("📊 ContentView: Starting OrderBook and Trade subscriptions...")
+        orderBookViewModel.connect()
+        tradeViewModel.connect()
+    }
+    
+    @State private var cancellables = Set<AnyCancellable>()
 }
 
 #Preview {

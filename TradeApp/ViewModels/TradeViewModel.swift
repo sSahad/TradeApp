@@ -12,11 +12,11 @@ import SwiftUI
 class TradeViewModel: ObservableObject {
     @Published var tradesState = TradesState()
     @Published var isLoading = true
-    @Published var connectionStatus: WebSocketManager.ConnectionStatus = .disconnected
+    @Published var connectionStatus: ConnectionStatus = .disconnected
     
-    private let webSocketManager: WebSocketManager
+    private let tradeUseCase: TradeUseCaseProtocol
+    private let formattingUseCase: FormattingUseCaseProtocol
     private var cancellables = Set<AnyCancellable>()
-    private var highlightTimer: Timer?
     
     // Computed properties for UI
     var trades: [TradeItem] {
@@ -27,27 +27,29 @@ class TradeViewModel: ObservableObject {
         return tradesState.animatedTrades
     }
     
-    init(webSocketManager: WebSocketManager) {
-        self.webSocketManager = webSocketManager
+    init(tradeUseCase: TradeUseCaseProtocol, formattingUseCase: FormattingUseCaseProtocol) {
+        self.tradeUseCase = tradeUseCase
+        self.formattingUseCase = formattingUseCase
         setupSubscriptions()
-        startHighlightTimer()
-    }
-    
-    deinit {
-        highlightTimer?.invalidate()
+        // Don't auto-start here - let ContentView manage the connection
     }
     
     private func setupSubscriptions() {
-        // Subscribe to trade updates
-        webSocketManager.tradePublisher
+        // Subscribe to trades state updates
+        tradeUseCase.tradesStatePublisher
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] response in
-                self?.handleTradeUpdate(response)
+            .sink { [weak self] state in
+                self?.tradesState = state
+                if self?.isLoading == true {
+                    self?.isLoading = false
+                }
+                // Force UI update for animations
+                self?.objectWillChange.send()
             }
             .store(in: &cancellables)
         
         // Subscribe to connection status
-        webSocketManager.connectionStatusPublisher
+        tradeUseCase.connectionStatusPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] status in
                 self?.connectionStatus = status
@@ -58,54 +60,24 @@ class TradeViewModel: ObservableObject {
             .store(in: &cancellables)
     }
     
-    private func handleTradeUpdate(_ response: BitMEXTradeResponse) {
-        guard !response.data.isEmpty else { return }
-        
-        // Debug: Print trade data to see timestamps
-        print("📈 Received \(response.data.count) trades:")
-        for trade in response.data.prefix(3) { // Print first 3 trades
-            print("  - Trade: \(trade.trdMatchID), timestamp: '\(trade.timestamp)', formatted: \(trade.formattedTimestamp?.description ?? "nil")")
-        }
-        
-        tradesState.addNewTrades(response.data)
-        
-        // Stop loading indicator after first data
-        if isLoading {
-            isLoading = false
-        }
-        
-        // Force UI update for animations
-        objectWillChange.send()
-    }
-    
-    private func startHighlightTimer() {
-        highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.updateHighlights()
-        }
-    }
-    
-    private func updateHighlights() {
-        tradesState.updateHighlights()
-        
-        // Check if any highlights need to be removed
-        let hasActiveHighlights = tradesState.animatedTrades.contains { $0.isHighlighted }
-        if hasActiveHighlights {
-            objectWillChange.send()
-        }
-    }
-    
     // MARK: - Public Methods
     
     func connect() {
-        webSocketManager.connect()
+        tradeUseCase.startTradeUpdates()
     }
     
     func disconnect() {
-        webSocketManager.disconnect()
+        tradeUseCase.stopTradeUpdates()
     }
     
     func reconnect() {
-        webSocketManager.reconnect()
+        tradeUseCase.reconnect()
+    }
+    
+    func refresh() {
+        // Trigger a safe refresh without disconnecting WebSocket
+        // This just updates the UI state without affecting the connection
+        objectWillChange.send()
     }
     
     // MARK: - Helper Methods for UI
@@ -127,32 +99,19 @@ class TradeViewModel: ObservableObject {
     }
     
     func formatPrice(_ price: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.minimumFractionDigits = 1
-        formatter.maximumFractionDigits = 1
-        return formatter.string(from: NSNumber(value: price)) ?? String(format: "%.1f", price)
+        return formattingUseCase.formatPrice(price)
     }
     
     func formatQty(_ size: Double) -> String {
-        return String(format: "%.4f", size)
+        return formattingUseCase.formatQty(size)
     }
     
     func formatSize(_ size: Double) -> String {
-        if size >= 1000000 {
-            return String(format: "%.1fM", size / 1000000)
-        } else if size >= 1000 {
-            return String(format: "%.1fK", size / 1000)
-        } else {
-            return String(format: "%.0f", size)
-        }
+        return formattingUseCase.formatSize(size)
     }
     
     func formatTime(_ trade: TradeItem) -> String {
-        guard let date = trade.formattedTimestamp else { return "N/A" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
+        return formattingUseCase.formatTime(trade)
     }
     
     func sideText(for trade: TradeItem) -> String {
