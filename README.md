@@ -522,27 +522,6 @@ class MockOrderBookRepository: OrderBookRepositoryProtocol {
 | **Network Efficiency** | Minimal bandwidth | Optimized WebSocket usage |
 | **UI Responsiveness** | 60fps smooth | Eliminated blocking operations |
 
----
-
-## 🤝 Contributing
-
-### Development Guidelines
-
-1. **Architecture**: Strict adherence to Clean Architecture principles
-2. **Concurrency**: Use async/await patterns for all asynchronous operations
-3. **Code Style**: Follow Apple's Swift API Design Guidelines
-4. **Testing**: Maintain 90%+ test coverage for new features (including async tests)
-5. **Documentation**: Update documentation for significant changes
-
-### Pull Request Process
-
-1. **Fork** the repository
-2. **Create** feature branch (`git checkout -b feature/amazing-async-feature`)
-3. **Implement** changes following architectural patterns
-4. **Add Tests** with comprehensive coverage including async scenarios
-5. **Update Documentation** as needed
-6. **Submit** Pull Request with detailed description
-
 ### Code Standards
 
 - ✅ **Swift Style Guide**: Apple's official Swift API Design Guidelines
@@ -589,21 +568,6 @@ class MockOrderBookRepository: OrderBookRepositoryProtocol {
 - **Local Storage**: Minimal temporary data with automatic cleanup
 - **Concurrency Safety**: MainActor isolation prevents data races
 
----
-
-## 📄 License
-
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
-
-### MIT License Summary
-- ✅ Commercial use
-- ✅ Modification
-- ✅ Distribution
-- ✅ Private use
-- ❌ Liability
-- ❌ Warranty
-
----
 
 ## 🙏 Acknowledgments
 
@@ -613,23 +577,3 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 - **Clean Architecture**: Robert C. Martin's architectural principles
 
 ---
-
-<div align="center">
-
-**Built with ❤️, SwiftUI, and Modern Swift Concurrency**
-
-[![GitHub Issues](https://img.shields.io/github/issues/sSahad/TradeApp?style=flat-square)](https://github.com/sSahad/TradeApp/issues)
-[![GitHub Pull Requests](https://img.shields.io/github/issues-pr/sSahad/TradeApp?style=flat-square)](https://github.com/sSahad/TradeApp/pulls)
-[![GitHub Stars](https://img.shields.io/github/stars/sSahad/TradeApp?style=flat-square)](https://github.com/sSahad/TradeApp/stargazers)
-
-[**Report Bug**](https://github.com/sSahad/TradeApp/issues) • [**Request Feature**](https://github.com/sSahad/TradeApp/issues) • [**Documentation**](https://github.com/sSahad/TradeApp/wiki)
-
----
-
-### 📊 Project Stats
-
-**Lines of Code**: ~2,000 • **Test Coverage**: 95%+ • **Supported Platforms**: 3 • **Dependencies**: 0
-
-Made with professional attention to detail and modern Swift best practices.
-
-</div> 
