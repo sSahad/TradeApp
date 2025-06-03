@@ -15,7 +15,7 @@ struct ContentView: View {
     private let webSocketService: WebSocketServiceProtocol
     private let networkMonitor: NetworkMonitor
     
-    @State private var selectedTab: TabType = .orderBook
+    @State private var selectedTab: TabType = .chart
     @State private var showConnectionDetails = false
     @State private var connectionStatus: ConnectionStatus = .disconnected
     @State private var networkConnected: Bool = true // Assume connected initially
@@ -23,11 +23,13 @@ struct ContentView: View {
     @State private var hasInitializedNetwork: Bool = false
     
     enum TabType: String, CaseIterable {
+        case chart = "Chart"
         case orderBook = "Order Book"
         case recentTrades = "Recent Trades"
         
         var icon: String {
             switch self {
+            case .chart: return "chart.line.uptrend.xyaxis"
             case .orderBook: return "list.bullet.rectangle"
             case .recentTrades: return "clock.arrow.circlepath"
             }
@@ -301,13 +303,15 @@ struct ContentView: View {
     
     private var modernContentView: some View {
         TabView(selection: $selectedTab) {
+            modernChartView
+                .tag(TabType.chart)
+            
             modernOrderBookView
                 .tag(TabType.orderBook)
             
             modernTradeView
                 .tag(TabType.recentTrades)
         }
-        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
         .animation(.easeInOut(duration: 0.3), value: selectedTab)
     }
     
@@ -321,6 +325,14 @@ struct ContentView: View {
     
     private var modernTradeView: some View {
         TradeView(viewModel: tradeViewModel)
+            .background(Constants.Colors.groupedBackground)
+            .clipShape(RoundedRectangle(cornerRadius: Constants.CornerRadius.large))
+            .padding(.horizontal, Constants.Spacing.sm)
+            .shadow(color: Constants.Shadow.light, radius: 4, x: 0, y: 2)
+    }
+    
+    private var modernChartView: some View {
+        ChartView()
             .background(Constants.Colors.groupedBackground)
             .clipShape(RoundedRectangle(cornerRadius: Constants.CornerRadius.large))
             .padding(.horizontal, Constants.Spacing.sm)
