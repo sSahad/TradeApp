@@ -39,7 +39,8 @@ TradeApp is a **production-ready** Bitcoin trading interface that provides real-
 
 <div align="center">
 
-![TradeApp Demo](TradeApp.gif)
+![TradeApp Demo](https://github.com/sSahad/TradeApp/blob/main/TradeApp/TradeApp.gif?raw=true)
+
 
 *Real-time Bitcoin trading interface with live order book, recent trades, and interactive price chart*
 
