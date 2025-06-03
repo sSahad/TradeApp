@@ -35,9 +35,29 @@ TradeApp is a **production-ready** Bitcoin trading interface that provides real-
 
 ---
 
+## 📱 Demo
+
+<div align="center">
+
+![TradeApp Demo](TradeApp.gif)
+
+*Real-time Bitcoin trading interface with live order book, recent trades, and interactive price chart*
+
+</div>
+
+---
+
 ## 🚀 Features
 
 ### Core Trading Features
+
+#### 📈 Interactive Price Chart
+- **BitMEX Chart Integration**: Full-featured XBTUSD price chart with candlestick visualization
+- **WebView Implementation**: Currently powered by WebKit for robust chart functionality
+- **Zoom & Pan Support**: Interactive chart navigation with pinch-to-zoom and scroll gestures
+- **Dark Theme Optimized**: Seamlessly integrated with app's dark theme aesthetics
+- **Loading & Error States**: Professional loading animations and error handling with retry functionality
+- **Future Enhancement**: Planned migration to native SwiftUI charting for better performance and customization
 
 #### 📊 Real-Time Order Book
 - **Live Market Depth**: Real-time buy/sell order visualization with proper sorting
@@ -231,6 +251,7 @@ TradeApp/
 │       │   └── TradeViewModel.swift        # Trade presentation logic
 │       │
 │       └── Views/
+│           ├── ChartView.swift             # BitMEX chart integration (WebKit)
 │           ├── OrderBookView.swift         # Order book UI components
 │           ├── TradeView.swift             # Trade feed UI components
 │           └── NoInternetView.swift        # Network error UI
@@ -381,6 +402,14 @@ private func connectToWebSocket() async {
 
 ### Interface Guide
 
+#### 📈 Chart Tab (Default)
+- **Interactive Chart**: Full BitMEX XBTUSD price chart with candlestick visualization
+- **Zoom & Pan**: Pinch-to-zoom and scroll gestures for detailed chart analysis
+- **Dark Theme**: Seamlessly integrated with app's color scheme
+- **Loading States**: Professional loading animations while chart data loads
+- **Error Handling**: Graceful error states with retry functionality
+- **WebView Based**: Currently implemented with WebKit (future migration to native SwiftUI planned)
+
 #### 📊 Order Book Tab
 - **Buy Orders (Left)**: Green-highlighted orders, sorted by price (highest first)
 - **Sell Orders (Right)**: Red-highlighted orders, sorted by price (lowest first)
@@ -414,6 +443,855 @@ private func connectToWebSocket() async {
 - **Smart Reconnection**: Exponential backoff retry logic
 - **Clean State Recovery**: Proper state reset and data refresh on reconnection
 - **User Control**: Manual "Try Again" button for immediate retry
+
+---
+
+## 🛠️ Development Guide
+
+### Adding New Features - Step by Step Tutorial
+
+This comprehensive guide walks you through the process of adding new features to TradeApp while maintaining Clean Architecture principles and modern Swift concurrency patterns.
+
+#### 📋 Overview of Architecture Flow
+
+When adding a new feature, you'll typically need to touch these layers in this order:
+
+```
+1. 📝 Define Models (if needed)          → Data structures
+2. 🔗 Define Protocols                   → Interfaces/contracts
+3. 💾 Implement Repository              → Data access layer
+4. 🧠 Implement Use Case                → Business logic
+5. 🎨 Create View Model                 → Presentation logic
+6. 📱 Create SwiftUI View               → UI components
+7. 🔧 Update DI Container               → Dependency injection
+8. 📄 Update Content View               → Main navigation
+9. 🧪 Add Tests                         → Comprehensive testing
+```
+
+#### 🎯 Example: Adding a New "Portfolio" Feature
+
+Let's walk through adding a hypothetical portfolio tracking feature that shows user's Bitcoin holdings:
+
+##### Step 1: Define Models (`Models/`)
+
+Create data structures for your feature:
+
+```swift
+// Models/PortfolioItem.swift
+import Foundation
+
+struct PortfolioItem: Identifiable, Codable {
+    let id = UUID()
+    let symbol: String           // e.g., "XBTUSD"
+    let quantity: Double        // Amount held
+    let averagePrice: Double    // Average purchase price
+    let currentPrice: Double    // Current market price
+    let timestamp: Date         // Last updated
+    
+    // Computed properties for business logic
+    var totalValue: Double {
+        return quantity * currentPrice
+    }
+    
+    var profitLoss: Double {
+        return (currentPrice - averagePrice) * quantity
+    }
+    
+    var profitLossPercentage: Double {
+        guard averagePrice > 0 else { return 0.0 }
+        return ((currentPrice - averagePrice) / averagePrice) * 100
+    }
+}
+
+struct PortfolioState {
+    var items: [PortfolioItem] = []
+    var totalValue: Double = 0.0
+    var totalProfitLoss: Double = 0.0
+    var isLoading: Bool = false
+    var lastUpdated: Date?
+}
+```
+
+##### Step 2: Define Protocols (`Domain/Protocols/`)
+
+Define interfaces for dependency inversion:
+
+```swift
+// Domain/Protocols/PortfolioProtocols.swift
+import Foundation
+import Combine
+
+protocol PortfolioRepositoryProtocol {
+    var portfolioStatePublisher: AnyPublisher<PortfolioState, Never> { get }
+    func updatePortfolioItem(_ item: PortfolioItem) async
+    func deletePortfolioItem(id: UUID) async
+    func refreshPortfolio() async
+}
+
+protocol PortfolioUseCaseProtocol {
+    var portfolioStatePublisher: AnyPublisher<PortfolioState, Never> { get }
+    var connectionStatusPublisher: AnyPublisher<ConnectionStatus, Never> { get }
+    
+    func connect() async
+    func disconnect()
+    func addHolding(symbol: String, quantity: Double, averagePrice: Double) async
+    func updateHolding(id: UUID, quantity: Double, averagePrice: Double) async
+    func removeHolding(id: UUID) async
+    func refresh()
+}
+```
+
+##### Step 3: Implement Repository (`Data/Repositories/`)
+
+Handle data persistence and external API integration:
+
+```swift
+// Data/Repositories/PortfolioRepository.swift
+import Foundation
+import Combine
+
+class PortfolioRepository: PortfolioRepositoryProtocol {
+    private let portfolioStateSubject = CurrentValueSubject<PortfolioState, Never>(PortfolioState())
+    
+    var portfolioStatePublisher: AnyPublisher<PortfolioState, Never> {
+        portfolioStateSubject.eraseToAnyPublisher()
+    }
+    
+    // UserDefaults for local persistence (could be Core Data for complex apps)
+    private let userDefaults = UserDefaults.standard
+    private let portfolioKey = "saved_portfolio"
+    
+    init() {
+        loadSavedPortfolio()
+    }
+    
+    func updatePortfolioItem(_ item: PortfolioItem) async {
+        var currentState = portfolioStateSubject.value
+        
+        if let index = currentState.items.firstIndex(where: { $0.id == item.id }) {
+            currentState.items[index] = item
+        } else {
+            currentState.items.append(item)
+        }
+        
+        await updatePortfolioState(currentState)
+    }
+    
+    func deletePortfolioItem(id: UUID) async {
+        var currentState = portfolioStateSubject.value
+        currentState.items.removeAll { $0.id == id }
+        await updatePortfolioState(currentState)
+    }
+    
+    func refreshPortfolio() async {
+        var currentState = portfolioStateSubject.value
+        currentState.isLoading = true
+        portfolioStateSubject.send(currentState)
+        
+        // Simulate API call delay
+        try? await Task.sleep(for: .milliseconds(500))
+        
+        currentState.isLoading = false
+        currentState.lastUpdated = Date()
+        await updatePortfolioState(currentState)
+    }
+    
+    @MainActor
+    private func updatePortfolioState(_ state: PortfolioState) async {
+        portfolioStateSubject.send(state)
+        savePortfolio(state)
+    }
+    
+    private func loadSavedPortfolio() {
+        // Load from UserDefaults (implement proper error handling)
+        if let data = userDefaults.data(forKey: portfolioKey),
+           let items = try? JSONDecoder().decode([PortfolioItem].self, from: data) {
+            var state = portfolioStateSubject.value
+            state.items = items
+            portfolioStateSubject.send(state)
+        }
+    }
+    
+    private func savePortfolio(_ state: PortfolioState) {
+        // Save to UserDefaults (implement proper error handling)
+        if let data = try? JSONEncoder().encode(state.items) {
+            userDefaults.set(data, forKey: portfolioKey)
+        }
+    }
+}
+```
+
+##### Step 4: Implement Use Case (`Domain/UseCases/`)
+
+Implement business logic and coordinate between data and presentation layers:
+
+```swift
+// Domain/UseCases/PortfolioUseCase.swift
+import Foundation
+import Combine
+
+class PortfolioUseCase: PortfolioUseCaseProtocol {
+    private let repository: PortfolioRepositoryProtocol
+    private let webSocketService: WebSocketServiceProtocol
+    private var cancellables = Set<AnyCancellable>()
+    
+    var portfolioStatePublisher: AnyPublisher<PortfolioState, Never> {
+        repository.portfolioStatePublisher
+    }
+    
+    var connectionStatusPublisher: AnyPublisher<ConnectionStatus, Never> {
+        webSocketService.connectionStatusPublisher
+    }
+    
+    init(repository: PortfolioRepositoryProtocol, webSocketService: WebSocketServiceProtocol) {
+        self.repository = repository
+        self.webSocketService = webSocketService
+    }
+    
+    func connect() async {
+        // Subscribe to price updates for portfolio items
+        setupPriceSubscriptions()
+    }
+    
+    func disconnect() {
+        cancellables.removeAll()
+    }
+    
+    func addHolding(symbol: String, quantity: Double, averagePrice: Double) async {
+        let newItem = PortfolioItem(
+            symbol: symbol,
+            quantity: quantity,
+            averagePrice: averagePrice,
+            currentPrice: averagePrice, // Start with average price
+            timestamp: Date()
+        )
+        await repository.updatePortfolioItem(newItem)
+    }
+    
+    func updateHolding(id: UUID, quantity: Double, averagePrice: Double) async {
+        let currentState = await repository.portfolioStatePublisher.first().value
+        guard let existingItem = currentState.items.first(where: { $0.id == id }) else { return }
+        
+        let updatedItem = PortfolioItem(
+            symbol: existingItem.symbol,
+            quantity: quantity,
+            averagePrice: averagePrice,
+            currentPrice: existingItem.currentPrice,
+            timestamp: Date()
+        )
+        await repository.updatePortfolioItem(updatedItem)
+    }
+    
+    func removeHolding(id: UUID) async {
+        await repository.deletePortfolioItem(id: id)
+    }
+    
+    func refresh() {
+        Task {
+            await repository.refreshPortfolio()
+        }
+    }
+    
+    private func setupPriceSubscriptions() {
+        // This would integrate with existing WebSocket price feeds
+        // Update portfolio items with current market prices
+        // (Implementation depends on your specific price data structure)
+    }
+}
+```
+
+##### Step 5: Create View Model (`ViewModels/`)
+
+Handle presentation logic and UI state management:
+
+```swift
+// ViewModels/PortfolioViewModel.swift
+import Foundation
+import Combine
+import SwiftUI
+
+@MainActor
+class PortfolioViewModel: ObservableObject {
+    @Published var portfolioState = PortfolioState()
+    @Published var isLoading = false
+    @Published var connectionStatus: ConnectionStatus = .disconnected
+    @Published var showingAddHoldingSheet = false
+    
+    private let portfolioUseCase: PortfolioUseCaseProtocol
+    private let formattingUseCase: FormattingUseCaseProtocol
+    private var cancellables = Set<AnyCancellable>()
+    
+    // Computed properties for UI
+    var holdings: [PortfolioItem] {
+        return portfolioState.items.sorted { $0.symbol < $1.symbol }
+    }
+    
+    var totalPortfolioValue: String {
+        return formattingUseCase.formatCurrency(portfolioState.totalValue)
+    }
+    
+    var totalProfitLoss: String {
+        return formattingUseCase.formatCurrency(portfolioState.totalProfitLoss)
+    }
+    
+    init(portfolioUseCase: PortfolioUseCaseProtocol, formattingUseCase: FormattingUseCaseProtocol) {
+        self.portfolioUseCase = portfolioUseCase
+        self.formattingUseCase = formattingUseCase
+        setupSubscriptions()
+    }
+    
+    private func setupSubscriptions() {
+        // Subscribe to portfolio state updates
+        portfolioUseCase.portfolioStatePublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in
+                self?.portfolioState = state
+                self?.isLoading = state.isLoading
+            }
+            .store(in: &cancellables)
+        
+        // Subscribe to connection status
+        portfolioUseCase.connectionStatusPublisher
+            .receive(on: DispatchQueue.main)
+            .assign(to: \.connectionStatus, on: self)
+            .store(in: &cancellables)
+    }
+    
+    // MARK: - Public Methods
+    
+    func connect() {
+        Task {
+            await portfolioUseCase.connect()
+        }
+    }
+    
+    func disconnect() {
+        portfolioUseCase.disconnect()
+    }
+    
+    func addHolding(symbol: String, quantity: Double, averagePrice: Double) {
+        Task {
+            await portfolioUseCase.addHolding(symbol: symbol, quantity: quantity, averagePrice: averagePrice)
+        }
+    }
+    
+    func updateHolding(id: UUID, quantity: Double, averagePrice: Double) {
+        Task {
+            await portfolioUseCase.updateHolding(id: id, quantity: quantity, averagePrice: averagePrice)
+        }
+    }
+    
+    func removeHolding(id: UUID) {
+        Task {
+            await portfolioUseCase.removeHolding(id: id)
+        }
+    }
+    
+    func refresh() {
+        portfolioUseCase.refresh()
+    }
+    
+    // Formatting helpers
+    func formatPrice(_ price: Double) -> String {
+        return formattingUseCase.formatPrice(price)
+    }
+    
+    func formatCurrency(_ amount: Double) -> String {
+        return formattingUseCase.formatCurrency(amount)
+    }
+    
+    func formatPercentage(_ percentage: Double) -> String {
+        return formattingUseCase.formatPercentage(percentage)
+    }
+}
+```
+
+##### Step 6: Create SwiftUI View (`Views/`)
+
+Build the user interface following app's design patterns:
+
+```swift
+// Views/PortfolioView.swift
+import SwiftUI
+
+struct PortfolioView: View {
+    @ObservedObject var viewModel: PortfolioViewModel
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Modern header following app's design
+            modernHeader
+            
+            // Portfolio content
+            if viewModel.connectionStatus == .noInternet {
+                modernNoInternetView
+            } else if viewModel.isLoading && viewModel.holdings.isEmpty {
+                modernLoadingView
+            } else {
+                modernPortfolioContent
+            }
+        }
+        .background(Constants.Colors.primaryBackground)
+        .clipShape(RoundedRectangle(cornerRadius: Constants.CornerRadius.medium))
+        .sheet(isPresented: $viewModel.showingAddHoldingSheet) {
+            AddHoldingView(viewModel: viewModel)
+        }
+    }
+    
+    private var modernHeader: some View {
+        VStack(spacing: Constants.Spacing.sm) {
+            HStack {
+                HStack(spacing: Constants.Spacing.xs) {
+                    Image(systemName: "chart.pie.fill")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(Constants.Colors.accent)
+                    
+                    Text("Portfolio")
+                        .font(Constants.Typography.headline)
+                        .foregroundColor(Constants.Colors.primaryText)
+                }
+                
+                Spacer()
+                
+                Button(action: {
+                    viewModel.showingAddHoldingSheet = true
+                }) {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundColor(Constants.Colors.accent)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+            .padding(.horizontal, Constants.Spacing.md)
+            .padding(.top, Constants.Spacing.md)
+            .padding(.bottom, Constants.Spacing.sm)
+            
+            // Portfolio summary
+            modernPortfolioSummary
+        }
+        .background(
+            Constants.Colors.cardBackground
+                .overlay(
+                    Rectangle()
+                        .frame(height: 0.5)
+                        .foregroundColor(Constants.Colors.secondaryText.opacity(0.1)),
+                    alignment: .bottom
+                )
+        )
+    }
+    
+    private var modernPortfolioSummary: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: Constants.Spacing.xs) {
+                Text("Total Value")
+                    .font(Constants.Typography.caption)
+                    .foregroundColor(Constants.Colors.secondaryText)
+                
+                Text(viewModel.totalPortfolioValue)
+                    .font(Constants.Typography.headline)
+                    .foregroundColor(Constants.Colors.primaryText)
+            }
+            
+            Spacer()
+            
+            VStack(alignment: .trailing, spacing: Constants.Spacing.xs) {
+                Text("P&L")
+                    .font(Constants.Typography.caption)
+                    .foregroundColor(Constants.Colors.secondaryText)
+                
+                Text(viewModel.totalProfitLoss)
+                    .font(Constants.Typography.headline)
+                    .foregroundColor(viewModel.portfolioState.totalProfitLoss >= 0 ? 
+                                     Constants.Colors.buyPrimary : Constants.Colors.sellPrimary)
+            }
+        }
+        .padding(.horizontal, Constants.Spacing.md)
+        .padding(.bottom, Constants.Spacing.sm)
+    }
+    
+    private var modernPortfolioContent: some View {
+        ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: 1) {
+                ForEach(viewModel.holdings) { holding in
+                    modernHoldingRow(holding)
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .refreshable {
+            await refreshPortfolio()
+        }
+    }
+    
+    private func modernHoldingRow(_ holding: PortfolioItem) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: Constants.Spacing.xs) {
+                Text(holding.symbol)
+                    .font(Constants.Typography.body)
+                    .fontWeight(.semibold)
+                    .foregroundColor(Constants.Colors.primaryText)
+                
+                Text("\(viewModel.formatPrice(holding.quantity)) @ \(viewModel.formatPrice(holding.averagePrice))")
+                    .font(Constants.Typography.caption)
+                    .foregroundColor(Constants.Colors.secondaryText)
+            }
+            
+            Spacer()
+            
+            VStack(alignment: .trailing, spacing: Constants.Spacing.xs) {
+                Text(viewModel.formatCurrency(holding.totalValue))
+                    .font(Constants.Typography.body)
+                    .fontWeight(.semibold)
+                    .foregroundColor(Constants.Colors.primaryText)
+                
+                Text(viewModel.formatPercentage(holding.profitLossPercentage))
+                    .font(Constants.Typography.caption)
+                    .foregroundColor(holding.profitLoss >= 0 ? 
+                                     Constants.Colors.buyPrimary : Constants.Colors.sellPrimary)
+            }
+        }
+        .padding(.horizontal, Constants.Spacing.md)
+        .padding(.vertical, Constants.Spacing.sm)
+        .background(Constants.Colors.primaryBackground)
+        .swipeActions(edge: .trailing) {
+            Button("Delete", role: .destructive) {
+                viewModel.removeHolding(id: holding.id)
+            }
+        }
+    }
+    
+    private var modernLoadingView: some View {
+        VStack(spacing: Constants.Spacing.lg) {
+            ZStack {
+                Circle()
+                    .stroke(Constants.Colors.accent.opacity(0.2), lineWidth: 3)
+                    .frame(width: 40, height: 40)
+                
+                Circle()
+                    .trim(from: 0, to: 0.7)
+                    .stroke(
+                        LinearGradient(
+                            colors: [Constants.Colors.accent, Constants.Colors.accent.opacity(0.3)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                    )
+                    .frame(width: 40, height: 40)
+                    .rotationEffect(.degrees(-90))
+                    .animation(.linear(duration: 1.0).repeatForever(autoreverses: false), value: UUID())
+            }
+            
+            VStack(spacing: Constants.Spacing.xs) {
+                Text("Loading Portfolio")
+                    .font(Constants.Typography.headline)
+                    .foregroundColor(Constants.Colors.primaryText)
+                
+                Text("Fetching your holdings...")
+                    .font(Constants.Typography.caption)
+                    .foregroundColor(Constants.Colors.tertiaryText)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Constants.Colors.primaryBackground)
+    }
+    
+    private var modernNoInternetView: some View {
+        VStack(spacing: Constants.Spacing.lg) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 32, weight: .light))
+                .foregroundColor(Constants.Colors.error)
+            
+            VStack(spacing: Constants.Spacing.xs) {
+                Text("No Internet Connection")
+                    .font(Constants.Typography.headline)
+                    .foregroundColor(Constants.Colors.primaryText)
+                
+                Text("Check your connection to view portfolio")
+                    .font(Constants.Typography.caption)
+                    .foregroundColor(Constants.Colors.tertiaryText)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Constants.Colors.primaryBackground)
+    }
+    
+    @MainActor
+    private func refreshPortfolio() async {
+        viewModel.refresh()
+        try? await Task.sleep(for: .milliseconds(500))
+    }
+}
+
+#Preview {
+    let diContainer = DIContainer.shared
+    let viewModel = diContainer.makePortfolioViewModel()
+    return PortfolioView(viewModel: viewModel)
+        .background(Constants.Colors.groupedBackground)
+}
+```
+
+##### Step 7: Update DI Container (`DI/DIContainer.swift`)
+
+Add factory methods for your new components:
+
+```swift
+// Add to DIContainer.swift
+extension DIContainer {
+    func makePortfolioViewModel() -> PortfolioViewModel {
+        return PortfolioViewModel(
+            portfolioUseCase: makePortfolioUseCase(),
+            formattingUseCase: makeFormattingUseCase()
+        )
+    }
+    
+    private func makePortfolioUseCase() -> PortfolioUseCaseProtocol {
+        return PortfolioUseCase(
+            repository: makePortfolioRepository(),
+            webSocketService: getWebSocketService()
+        )
+    }
+    
+    private func makePortfolioRepository() -> PortfolioRepositoryProtocol {
+        return PortfolioRepository()
+    }
+}
+```
+
+##### Step 8: Update ContentView Navigation
+
+Add your new tab to the main navigation:
+
+```swift
+// In ContentView.swift, update TabType enum:
+enum TabType: String, CaseIterable {
+    case chart = "Chart"
+    case orderBook = "Order Book"
+    case recentTrades = "Recent Trades"
+    case portfolio = "Portfolio"        // Add new case
+    
+    var icon: String {
+        switch self {
+        case .chart: return "chart.line.uptrend.xyaxis"
+        case .orderBook: return "list.bullet.rectangle"
+        case .recentTrades: return "clock.arrow.circlepath"
+        case .portfolio: return "chart.pie.fill"    // Add icon
+        }
+    }
+}
+
+// Add PortfolioViewModel to ContentView:
+@StateObject private var portfolioViewModel: PortfolioViewModel
+
+// Update init method:
+self._portfolioViewModel = StateObject(wrappedValue: diContainer.makePortfolioViewModel())
+
+// Add to modernContentView TabView:
+modernPortfolioView
+    .tag(TabType.portfolio)
+
+// Add modernPortfolioView property:
+private var modernPortfolioView: some View {
+    PortfolioView(viewModel: portfolioViewModel)
+        .background(Constants.Colors.groupedBackground)
+        .clipShape(RoundedRectangle(cornerRadius: Constants.CornerRadius.large))
+        .padding(.horizontal, Constants.Spacing.sm)
+        .shadow(color: Constants.Shadow.light, radius: 4, x: 0, y: 2)
+}
+
+// Update lifecycle methods:
+.onAppear {
+    // ... existing code ...
+    portfolioViewModel.connect()
+}
+.onDisappear {
+    // ... existing code ...
+    portfolioViewModel.disconnect()
+}
+```
+
+##### Step 9: Add Comprehensive Tests
+
+Create tests for all layers:
+
+```swift
+// TradeAppTests/PortfolioTests.swift
+import XCTest
+import Combine
+@testable import TradeApp
+
+final class PortfolioTests: XCTestCase {
+    private var cancellables: Set<AnyCancellable>!
+    
+    override func setUp() {
+        super.setUp()
+        cancellables = Set<AnyCancellable>()
+    }
+    
+    override func tearDown() {
+        cancellables = nil
+        super.tearDown()
+    }
+    
+    func test_PortfolioRepository_AddItem_UpdatesState() async {
+        // Given
+        let repository = PortfolioRepository()
+        let expectation = XCTestExpectation(description: "Portfolio updated")
+        
+        var receivedState: PortfolioState?
+        repository.portfolioStatePublisher
+            .dropFirst() // Skip initial empty state
+            .sink { state in
+                receivedState = state
+                expectation.fulfill()
+            }
+            .store(in: &cancellables)
+        
+        // When
+        let testItem = PortfolioItem(
+            symbol: "XBTUSD",
+            quantity: 1.0,
+            averagePrice: 50000.0,
+            currentPrice: 52000.0,
+            timestamp: Date()
+        )
+        await repository.updatePortfolioItem(testItem)
+        
+        // Then
+        await fulfillment(of: [expectation], timeout: 1.0)
+        XCTAssertEqual(receivedState?.items.count, 1)
+        XCTAssertEqual(receivedState?.items.first?.symbol, "XBTUSD")
+    }
+    
+    @MainActor
+    func test_PortfolioViewModel_AddHolding_UpdatesState() async {
+        // Given
+        let mockRepository = MockPortfolioRepository()
+        let mockUseCase = MockPortfolioUseCase(repository: mockRepository)
+        let formattingUseCase = FormattingUseCase()
+        let viewModel = PortfolioViewModel(
+            portfolioUseCase: mockUseCase,
+            formattingUseCase: formattingUseCase
+        )
+        
+        // When
+        viewModel.addHolding(symbol: "XBTUSD", quantity: 1.0, averagePrice: 50000.0)
+        
+        // Wait for async operation
+        try? await Task.sleep(for: .milliseconds(100))
+        
+        // Then
+        XCTAssertEqual(viewModel.holdings.count, 1)
+        XCTAssertEqual(viewModel.holdings.first?.symbol, "XBTUSD")
+    }
+}
+
+// Mock classes for testing
+class MockPortfolioRepository: PortfolioRepositoryProtocol {
+    private let stateSubject = CurrentValueSubject<PortfolioState, Never>(PortfolioState())
+    
+    var portfolioStatePublisher: AnyPublisher<PortfolioState, Never> {
+        stateSubject.eraseToAnyPublisher()
+    }
+    
+    func updatePortfolioItem(_ item: PortfolioItem) async {
+        var state = stateSubject.value
+        state.items.append(item)
+        stateSubject.send(state)
+    }
+    
+    func deletePortfolioItem(id: UUID) async {
+        var state = stateSubject.value
+        state.items.removeAll { $0.id == id }
+        stateSubject.send(state)
+    }
+    
+    func refreshPortfolio() async {
+        // Mock implementation
+    }
+}
+```
+
+#### 🔧 Best Practices & Guidelines
+
+##### Architecture Guidelines
+1. **Follow Single Responsibility**: Each class should have one reason to change
+2. **Use Dependency Injection**: Always inject dependencies through protocols
+3. **Async/Await First**: Use modern concurrency patterns for all async operations
+4. **MainActor Isolation**: Ensure UI updates happen on main thread
+5. **Protocol-Based Design**: Define interfaces before implementations
+
+##### Code Quality Standards
+1. **Meaningful Names**: Use descriptive names for variables, functions, and classes
+2. **Error Handling**: Implement proper error handling with do-catch blocks
+3. **Documentation**: Add comments for complex business logic
+4. **Performance**: Use lazy loading and memory-efficient patterns
+5. **Testing**: Maintain 90%+ test coverage for new features
+
+##### UI/UX Guidelines
+1. **Consistent Design**: Follow existing design patterns and color schemes
+2. **Accessibility**: Include accessibility labels and support for VoiceOver
+3. **Loading States**: Implement proper loading animations
+4. **Error States**: Show user-friendly error messages
+5. **Pull-to-Refresh**: Add refresh functionality where appropriate
+
+##### Testing Strategy
+1. **Unit Tests**: Test individual components in isolation
+2. **Integration Tests**: Test interaction between layers
+3. **UI Tests**: Test user flows and accessibility
+4. **Mock Objects**: Use mocks for external dependencies
+5. **Async Testing**: Properly test async/await patterns
+
+#### 📚 Common Patterns
+
+##### Repository Pattern
+```swift
+// Always use protocols for repositories
+protocol DataRepositoryProtocol {
+    var dataPublisher: AnyPublisher<DataState, Never> { get }
+    func fetchData() async throws
+    func updateData(_ data: DataModel) async throws
+}
+```
+
+##### Use Case Pattern
+```swift
+// Business logic in use cases
+class DataUseCase: DataUseCaseProtocol {
+    private let repository: DataRepositoryProtocol
+    
+    init(repository: DataRepositoryProtocol) {
+        self.repository = repository
+    }
+    
+    func processData() async {
+        // Business logic here
+    }
+}
+```
+
+##### ViewModel Pattern
+```swift
+// ViewModels handle presentation logic
+@MainActor
+class DataViewModel: ObservableObject {
+    @Published var state = DataState()
+    
+    private let useCase: DataUseCaseProtocol
+    
+    init(useCase: DataUseCaseProtocol) {
+        self.useCase = useCase
+        setupSubscriptions()
+    }
+}
+```
+
+This architecture ensures:
+- **Maintainability**: Easy to modify and extend
+- **Testability**: Each layer can be tested independently
+- **Scalability**: New features can be added without breaking existing code
+- **Performance**: Efficient async operations with proper memory management
 
 ---
 
